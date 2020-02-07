@@ -1,0 +1,84 @@
+using System.Threading.Tasks;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Azure.Documents.Client;
+using Microsoft.Azure.Documents.Linq;
+using System.Linq;
+using Microsoft.Azure.Documents;
+using System.Collections.Generic;
+using System;
+
+namespace Cosmos
+{
+    public  class CosmosApi
+    {
+        public static async Task QueryPageByPage()
+        {
+            // Number of documents per page
+            const int PAGE_SIZE = 3;
+
+            int currentPageNumber = 1;
+            int documentNumber = 1;
+
+            // Continuation token for subsequent queries (NULL for the very first request/page)
+            string continuationToken = null;
+
+            do
+            {
+                Console.WriteLine($"----- PAGE {currentPageNumber} -----");
+
+                // Loads ALL documents for the current page
+                KeyValuePair<string, IEnumerable<CeleryTask>> currentPage = await QueryDocumentsByPage2(currentPageNumber, PAGE_SIZE, continuationToken);
+
+                foreach (CeleryTask celeryTask in currentPage.Value)
+                {
+                    Console.WriteLine($"[{documentNumber}] {celeryTask.Id}");
+                    documentNumber++;
+                }
+
+                // Ensure the continuation token is kept for the next page query execution
+                continuationToken = currentPage.Key;
+                currentPageNumber++;
+            } while (continuationToken != null);
+
+            Console.WriteLine("\n--- END: Finished Querying ALL Dcuments ---");
+        }
+
+        private static Task<KeyValuePair<string, IEnumerable<CeleryTask>>> QueryDocumentsByPage2(int currentPageNumber, int pAGE_SIZE, string continuationToken)
+        {
+            throw new NotImplementedException();
+        }
+
+        [FunctionName("get")]
+        public static async Task<KeyValuePair<string, IEnumerable<CeleryTask>>> QueryDocumentsByPage(
+               [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "Documentos/{continuationToken}")] HttpRequest req,
+               [CosmosDB(ConnectionStringSetting = "Connection")]DocumentClient client,  string continuationToken)
+        {
+            var feedOptions = new FeedOptions
+            {
+                MaxItemCount = 4,
+                EnableCrossPartitionQuery = true,
+
+                // IMPORTANT: Set the continuation token (NULL for the first ever request/page)
+                RequestContinuation = continuationToken
+            };
+
+            IQueryable<CeleryTask> filter = client.CreateDocumentQuery<CeleryTask>("dbs/taskDatabase/colls/TaskCollection", feedOptions);
+            IDocumentQuery<CeleryTask> query = filter.AsDocumentQuery();
+
+            FeedResponse<CeleryTask> feedRespose = await query.ExecuteNextAsync<CeleryTask>();
+
+            List<CeleryTask> documents = new List<CeleryTask>();
+            foreach (CeleryTask t in feedRespose)
+            {
+                documents.Add(t);
+            }
+
+            // IMPORTANT: Ensure the continuation token is kept for the next requests
+            return new KeyValuePair<string, IEnumerable<CeleryTask>>(feedRespose.ResponseContinuation, documents);
+
+
+        }
+    }
+}

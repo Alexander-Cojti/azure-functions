@@ -1,0 +1,123 @@
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Microsoft.Azure.Search;
+using Microsoft.Azure.Search.Models;
+using Microsoft.WindowsAzure.Storage;
+using Microsoft.WindowsAzure.Storage.Blob;
+using Microsoft.WindowsAzure.Storage.Auth;
+using Microsoft.Azure.Documents;
+using Microsoft.Azure.Documents.Client;
+using System.Linq;
+using Microsoft.Extensions.Logging;
+using System;
+
+namespace cosmo_rest_api
+{
+    public static class Delete
+    {
+        [FunctionName("Delete")]
+        public static async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Anonymous, "delete", Route = "documentos/")]HttpRequest req,
+            [CosmosDB(ConnectionStringSetting = "CosmosDB")]DocumentClient client, ILogger log)
+        {
+            SearchServiceClient searchService = new SearchServiceClient(searchServiceName: "jfk-search-service-qymjpzort5hho", credentials: new SearchCredentials("023DB82430FFA416AD39EEF8A6FDFF2A"));///cramos nuestro servicio de clienteSearc
+            ISearchIndexClient indexClient = searchService.Indexes.GetClient("jfkindex");
+            StorageCredentials storageCredentials = new StorageCredentials("jfkstorageqymjpzort5hho",
+                "CamEKgqVaylmQta0aUTqN8vUy/xvUewVYZOrBvF1mh85zlgtj3fm7YheYRgoB6paMp+VcFUpTRIlow2VHlyCww==");
+            CloudStorageAccount storageAccount = new CloudStorageAccount(storageCredentials, true);
+            CloudBlobContainer container = storageAccount.CreateCloudBlobClient().GetContainerReference("datum");
+            string IdBoleta = req.Query["IdBoleta"];
+            string id = req.Query["id"];
+            string blobName = req.Query["blobName"];
+
+            var actions = IndexBatch.New(new[]
+             {
+                IndexAction.Delete("id", $"{IdBoleta}" )
+             });
+            CloudBlockBlob blockBlob = container.GetBlockBlobReference(blobName);
+            try
+            {
+                await client.DeleteDocumentAsync(UriFactory.CreateDocumentUri("taskDatabase", "TaskCollection", id));
+                indexClient.Documents.Index(actions);
+                await blockBlob.DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots, null, null, null);
+
+                return (ActionResult)new OkObjectResult($"Success executed function delete a document ");
+            }
+            catch
+            {
+                return (ActionResult)new OkObjectResult($"Fail an error found while execute delete a document"); ;
+            }
+        }
+
+
+        [FunctionName("DeleteAll")]
+        public static async System.Threading.Tasks.Task<ActionResult> DeleteAll(
+       [HttpTrigger(AuthorizationLevel.Function, "delete", Route = "DeleteAllDocBlobs")] HttpRequest req,
+       [CosmosDB(ConnectionStringSetting = "CosmosDB")]DocumentClient client, ILogger log)
+        {
+            //Credentials
+            SearchIndexClient indexClient = new SearchIndexClient("jfk-search-service-qymjpzort5hho", "jfkindex", new SearchCredentials("023DB82430FFA416AD39EEF8A6FDFF2A"));
+            StorageCredentials storageCredentials = new StorageCredentials("jfkstorageqymjpzort5hho",
+            "CamEKgqVaylmQta0aUTqN8vUy/xvUewVYZOrBvF1mh85zlgtj3fm7YheYRgoB6paMp+VcFUpTRIlow2VHlyCww==");
+            CloudStorageAccount storageAccount = new CloudStorageAccount(storageCredentials, useHttps: true);
+            CloudBlobContainer container = storageAccount.CreateCloudBlobClient().GetContainerReference("datum");
+            //wait to execute delete "Index-batch"    
+            try
+            {
+                while (true)
+                {
+                    DocumentSearchResult<Microsoft.Azure.Search.Models.Document> searchResult = indexClient.Documents.Search<Microsoft.Azure.Search.Models.Document>(string.Empty);
+                    List<string> azureDocsToDelete =
+                    searchResult.Results
+                        .Select(r => r.Document["id"].ToString()).ToList();
+                    if (azureDocsToDelete.Count != 0)
+                    {
+                        var batch = IndexBatch.Delete("id", azureDocsToDelete);
+                        var result = indexClient.Documents.Index(batch);
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                //delete all blockblobs "datum-container"
+                List<string> blobs = new List<string>();
+                BlobResultSegment resultSegment = await container.ListBlobsSegmentedAsync(null);
+                foreach (IListBlobItem item in resultSegment.Results)
+                {
+                    CloudBlockBlob blob = (CloudBlockBlob)item;
+                    blobs.Add(blob.Name);
+                }
+                foreach (var file in blobs)
+                {
+                    CloudBlockBlob blob = container.GetBlockBlobReference(file);
+                    await blob.DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots, null, null, null);
+                }
+                //create an instance "TaskCollection-container"
+                Database db = client.CreateDatabaseQuery().Where(d => d.Id == "taskDatabase").AsEnumerable().SingleOrDefault();
+                DocumentCollection coll = client.CreateDocumentCollectionQuery(db.SelfLink).Where(c => c.Id == "TaskCollection").ToList().SingleOrDefault();
+                var docs = client.CreateDocumentQuery(coll.DocumentsLink);
+                foreach (var doc in docs)
+                {
+                    await client.DeleteDocumentAsync(doc.SelfLink);
+                }
+                //delete collection "Recorrido-container"
+                DocumentCollection collection = client.CreateDocumentCollectionQuery(db.SelfLink).Where(a => a.Id == "recorrido").ToList().SingleOrDefault();
+                var docs2 = client.CreateDocumentQuery(collection.DocumentsLink);
+                foreach (var doc2 in docs2)
+                {
+                    await client.DeleteDocumentAsync(doc2.SelfLink, new RequestOptions { PartitionKey = new PartitionKey(doc2.Id) });
+                }
+                return (ActionResult)new OkObjectResult($" Success executed function Reset All ");
+            }
+            catch
+            {
+                return (ActionResult)new OkObjectResult($" Fail an error found while execute function Reset All ");
+            }
+        }
+
+    }
+}

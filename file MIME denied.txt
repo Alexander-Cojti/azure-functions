@@ -1,0 +1,58 @@
+using Microsoft.Azure.WebJobs;
+using System.Linq;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.WindowsAzure.Storage.Auth;
+using Microsoft.WindowsAzure.Storage;
+using Microsoft.WindowsAzure.Storage.Blob;
+using System.Threading.Tasks;
+using System.Net.Http;
+using System.Net;
+
+namespace blobtrigger
+{
+    public static class Function1
+    {
+        [FunctionName("UploadImage")]
+        public static async Task<HttpResponseMessage> Run([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "upload")]HttpRequestMessage req)
+        {
+            var provider = new MultipartMemoryStreamProvider();
+            await req.Content.ReadAsMultipartAsync(provider);
+            var file = provider.Contents.First();
+            var fileInfo = file.Headers.ContentDisposition;
+            var fileData = await file.ReadAsByteArrayAsync();
+
+            var newImage = new Image()
+            {
+                FileName = fileInfo.FileName,
+                Size = fileData.LongLength
+            };
+
+            var imageName = newImage.FileName;
+            if (!(await SaveToBlobStorage(imageName, fileData)))
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+
+            return new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent(imageName)
+            };
+        }
+           public static async Task<bool> SaveToBlobStorage(string blobName, byte[] data)
+        {
+            StorageCredentials storageCredentials = new StorageCredentials("jfkstorageqymjpzort5hho", "CamEKgqVaylmQta0aUTqN8vUy/xvUewVYZOrBvF1mh85zlgtj3fm7YheYRgoB6paMp+VcFUpTRIlow2VHlyCww==");
+            CloudStorageAccount storageAccount = new CloudStorageAccount(storageCredentials, true);
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+            CloudBlobContainer container = blobClient.GetContainerReference("datum");
+
+            var blob = container.GetBlockBlobReference(blobName);
+            await blob.UploadFromByteArrayAsync(data, 0, data.Length);
+
+            return true;
+        }
+    }
+}
+
+
+
+
+
+

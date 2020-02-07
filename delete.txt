@@ -1,0 +1,199 @@
+using cosmo_rest_api.Data;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.Azure.WebJobs.Host;
+using Newtonsoft.Json;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
+using Microsoft.Azure.Search;
+using Microsoft.Azure.Search.Models;
+using Microsoft.WindowsAzure.Storage;
+using Microsoft.WindowsAzure.Storage.Blob;
+using Microsoft.WindowsAzure.Storage.Auth;
+using Microsoft.Azure.Documents;
+using Microsoft.Azure.Documents.Client;
+using System.Linq;
+using System.Net.Http.Headers;
+using System.Net.Http;
+using System.Net;
+using System.Drawing;
+using Microsoft.Extensions.Logging;
+using System;
+
+namespace cosmo_rest_api
+{
+   
+       
+    public static class Delete
+    {
+        [FunctionName("Delete")]
+        public static async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Anonymous, "delete", Route = "documentos/")]HttpRequest req, ILogger log)
+        {
+            log.LogInformation("C# HTTP trigger function to delete a record from Cosmos DB && Delete index Document");
+
+            SearchServiceClient searchService = new SearchServiceClient(
+            searchServiceName: "jfk-search-service-qymjpzort5hho",
+            credentials: new SearchCredentials("023DB82430FFA416AD39EEF8A6FDFF2A"));///cramos nuestro servicio de clienteSearc
+            var indexName = "jfkindex";//definimos a que indice vamos a ingresar
+            ISearchIndexClient indexClient = searchService.Indexes.GetClient(indexName);//conectamos nuestro indice y nuestro clientesearch
+
+            StorageCredentials storageCredentials = new StorageCredentials("jfkstorageqymjpzort5hho",
+            "CamEKgqVaylmQta0aUTqN8vUy/xvUewVYZOrBvF1mh85zlgtj3fm7YheYRgoB6paMp+VcFUpTRIlow2VHlyCww==");
+            CloudStorageAccount storageAccount = new CloudStorageAccount(storageCredentials, true);
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+            CloudBlobContainer container = blobClient.GetContainerReference("datum");
+            
+
+
+            string IdBoleta = req.Query["IdBoleta"];
+            string id = req.Query["id"];
+            string blobName = req.Query["blobName"];
+
+            var actions = IndexBatch.New(new[]
+             {
+                IndexAction.Delete("id", $"{IdBoleta}" )
+             });
+
+            //preparando para deleteBlob
+            CloudBlockBlob blockBlob = container.GetBlockBlobReference(blobName);
+
+
+            IDocumentDBRepository<Employee> Respository = new DocumentDBRepository<Employee>();
+            try
+            {
+
+                indexClient.Documents.Index(actions);
+                await Respository.DeleteItemAsync(id, "TaskCollection");
+                await blockBlob.DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots, null, null, null);
+
+                return (ActionResult)new OkObjectResult($"Se ha eliminado el id: {id} y la boleta {IdBoleta}");
+            }
+            catch
+            {
+                return (ActionResult)new OkObjectResult($"No se pudo eliminar el id:{id} en cosmos, tampoco el id  {IdBoleta} en index, y el blob {blobName}"); ;
+            }
+        }
+    }    
+        public static class DeleteAll
+        {
+                [FunctionName("DeleteAll")]
+                public static async System.Threading.Tasks.Task<ActionResult> RunAsync(
+               [HttpTrigger(AuthorizationLevel.Function, "delete", Route = "DeleteAllDocBlobs")] HttpRequest req,
+               [CosmosDB(ConnectionStringSetting = "Connection")]DocumentClient client, ILogger log)
+                {
+                SearchServiceClient serviceClient = new SearchServiceClient(searchServiceName: "jfk-search-service-qymjpzort5hho", credentials: new SearchCredentials("023DB82430FFA416AD39EEF8A6FDFF2A"));
+                ISearchIndexClient indexClient = serviceClient.Indexes.GetClient("jfkindex");
+                DocumentSearchResult<Microsoft.Azure.Search.Models.Document> searchResult;
+                try
+                {
+                    searchResult = indexClient.Documents.Search<Microsoft.Azure.Search.Models.Document>(string.Empty);
+                }
+                catch (Exception e)
+                {
+                    throw new Exception("Error al recorrer index", e);
+                }
+                List<string> azureDocsToDelete =
+                    searchResult
+                        .Results
+                        .Select(r => r.Document["id"].ToString())
+                        .ToList();
+                try
+                {
+                    var batch = IndexBatch.Delete("id", azureDocsToDelete);
+                    var result = indexClient.Documents.Index(batch);
+                }
+                catch (IndexBatchException ex)
+                {
+                    throw new Exception($"error al eliminar documentos : {string.Join(", ", ex.IndexingResults.Where(r => !r.Succeeded).Select(r => r.Key))}");
+                }
+                Database db = client.CreateDatabaseQuery()
+                                   .Where(d => d.Id == "taskDatabase")
+                                   .AsEnumerable()
+                                   .SingleOrDefault();
+                DocumentCollection coll = client.CreateDocumentCollectionQuery(db.SelfLink)
+                                                .Where(c => c.Id == "TaskCollection")
+                                                .ToList()
+                                                .SingleOrDefault();
+                var docs = client.CreateDocumentQuery(coll.DocumentsLink);
+                foreach (var doc in docs)
+                {
+                    await client.DeleteDocumentAsync(doc.SelfLink);
+                }
+                StorageCredentials storageCredentials = new StorageCredentials("jfkstorageqymjpzort5hho",
+                    "CamEKgqVaylmQta0aUTqN8vUy/xvUewVYZOrBvF1mh85zlgtj3fm7YheYRgoB6paMp+VcFUpTRIlow2VHlyCww==");
+                CloudStorageAccount storageAccount = new CloudStorageAccount(storageCredentials, useHttps: true);
+                CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+                CloudBlobContainer container = blobClient.GetContainerReference("datum");
+                List<string> blobs = new List<string>();
+                BlobResultSegment resultSegment = await container.ListBlobsSegmentedAsync(null);
+                foreach (IListBlobItem item in resultSegment.Results)
+                {
+                    CloudBlockBlob blob = (CloudBlockBlob)item;
+                    blobs.Add(blob.Name);
+                }
+                foreach (var file in blobs)
+                {
+                    CloudBlockBlob blob = container.GetBlockBlobReference(file);
+                    await blob.DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots, null, null, null);
+                }
+                return (ActionResult)new OkObjectResult($" function ejecutado");
+            }
+        }
+   
+}
+
+
+/*
+ * using System;
+using System.IO;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using Microsoft.Azure.Search;
+using Microsoft.Azure.Search.Models;
+
+namespace DeleteDocsIndex
+{
+    public static class Function1
+    {
+        [FunctionName("Function1")]
+        public static async Task<IActionResult> Run(
+            [HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = null)] HttpRequest req,
+            ILogger log)
+        {
+            SearchServiceClient searchService = new SearchServiceClient(
+            searchServiceName: "jfk-search-service-qymjpzort5hho",
+              credentials: new SearchCredentials("023DB82430FFA416AD39EEF8A6FDFF2A"));
+            log.LogInformation("C# HTTP trigger function processed a request.");
+            var indexName = "jfkindex";
+            ISearchIndexClient indexClient = searchService.Indexes.GetClient(indexName);
+
+            string name = req.Query["name"];
+            
+
+            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+            dynamic data = JsonConvert.DeserializeObject(requestBody);
+            name = name ?? data?.name;
+
+            var actions = IndexBatch.New (
+              new[]
+             {
+            IndexAction.Delete("id", $"{name}" )
+            }
+            );
+              indexClient.Documents.Index(actions);
+
+            return name != null
+                ? (ActionResult)new OkObjectResult($"Se ha eliminado, {name}")
+                : new BadRequestObjectResult("Please pass a name on the query string or in the request body");
+        }
+    }
+}
+*/

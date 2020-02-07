@@ -1,0 +1,14 @@
+//creas tu cliente 
+
+SearchServiceClient searchService = new SearchServiceClient(
+                  searchServiceName: "jfk-search-service-qymjpzort5hho",
+                  credentials: new SearchCredentials("023DB82430FFA416AD39EEF8A6FDFF2A"));
+            
+            var indexerName = "jfkindexer";
+
+// le dat un searchService.Indexers.GetStatusAsync
+            var estado = await searchService.Indexers.GetStatusAsync(indexerName);
+            IndexerExecutionResult resultados = estado.LastResult;
+            var estadoIndexer = resultados.Status.ToString();
+            Console.WriteLine(estadoIndexer);
+

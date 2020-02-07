@@ -1,0 +1,102 @@
+using Microsoft.Azure.WebJobs;
+using System.Linq;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.WindowsAzure.Storage.Auth;
+using Microsoft.WindowsAzure.Storage;
+using Microsoft.WindowsAzure.Storage.Blob;
+using System.Threading.Tasks;
+using System.Net.Http;
+using System.Net;
+using System.Net.Http.Headers;
+using System;
+using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
+using System.Collections;
+
+namespace blobtrigger
+{
+    public class AzureStorageMultipartFormDataStreamProvider : MultipartFormDataStreamProvider
+    {
+        public readonly CloudBlobContainer _blobContainer;
+        public readonly string[] _supportedMimeTypes = { "image/png", "image/jpeg", "image/jpg" };
+
+        public AzureStorageMultipartFormDataStreamProvider(CloudBlobContainer blobContainer) : base("azure")
+        {
+            _blobContainer = blobContainer;
+        }
+
+        public async Task<CloudBlobStream> GetLikelihoodsAsync(HttpContent parent, HttpContentHeaders headers)
+        {
+
+            if (parent == null) throw new ArgumentNullException(nameof(parent));
+            if (headers == null) throw new ArgumentNullException(nameof(headers));
+
+            if (! _supportedMimeTypes.Contains(headers.ContentType.ToString().ToLower()))
+            {
+                throw new NotSupportedException("Only jpeg and png are supported");
+            }
+
+            // Generate a new filename for every new blob
+            var fileName = Guid.NewGuid().ToString();
+
+            CloudBlockBlob blob = _blobContainer.GetBlockBlobReference(fileName);
+
+            if (headers.ContentType != null)
+            {
+                // Set appropriate content type for your uploaded file
+                blob.Properties.ContentType = headers.ContentType.MediaType;
+            }
+
+            this.FileData.Add(new MultipartFileData(headers, blob.Name));
+
+            return await blob.OpenWriteAsync();
+        }
+    }
+    public static class Function1
+    {
+        [FunctionName("UploadImage")]
+        public static  async Task< IActionResult> Run([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "upload")]HttpRequestMessage Request)
+        {
+            StorageCredentials storageCredentials = new StorageCredentials("jfkstorageqymjpzort5hho", "CamEKgqVaylmQta0aUTqN8vUy/xvUewVYZOrBvF1mh85zlgtj3fm7YheYRgoB6paMp+VcFUpTRIlow2VHlyCww==");
+            CloudStorageAccount storageAccount = new CloudStorageAccount(storageCredentials, true);
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+            CloudBlobContainer container = blobClient.GetContainerReference("datum");
+
+
+            if (!Request.Content.IsMimeMultipartContent("form-data"))
+            {
+                throw new HttpResponseException(HttpStatusCode.UnsupportedMediaType);
+            }
+
+
+            var provider = new AzureStorageMultipartFormDataStreamProvider(container);
+           
+            try
+            {
+                await Request.Content.ReadAsMultipartAsync(provider);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"An error has occured. Details: {ex.Message}");
+            }
+            // Retrieve the filename of the file you have uploaded
+            var filename = provider.FileData.FirstOrDefault()?.LocalFileName;
+            if (string.IsNullOrEmpty(filename))
+            {
+                Console.WriteLine("An error has occured while uploading your file. Please try again.");
+            }
+            Console.WriteLine($"File: {filename} has successfully uploaded");
+            return (IActionResult)new OkObjectResult($"{filename}");
+        }
+        
+    }
+
+}
+
+
+
+
+
+
+
+
